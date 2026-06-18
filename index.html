@@ -33,7 +33,14 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 #_tr{-webkit-appearance:slider-vertical;writing-mode:vertical-lr;
   direction:rtl;width:28px;height:110px}
 #_tl{font-size:10px;color:#888}
+#_dtb{background:none;border:1px solid #444;color:#444;padding:5px 8px;
+  border-radius:4px;font-size:10px;cursor:pointer;font-family:monospace;
+  margin-top:6px;-webkit-tap-highlight-color:transparent;letter-spacing:1px}
+#_dtb.on{border-color:#0f0;color:#0f0}
+#_dtb:active{opacity:.6}
+#det{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
 </head>
 <body>
 
@@ -46,6 +53,7 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 </div>
 
 <canvas id="c"></canvas>
+<canvas id="det"></canvas>
 
 <div id="labels">
   <span class="lbl" style="top:4px;left:4px">RAW</span>
@@ -56,13 +64,14 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 
 <div id="hud">
   <span class="stat" id="_s1">--</span>
-  <span class="stat" id="_s2">--</span>
+  <span class="stat" id="_s2"></span>
 </div>
 
 <div id="slider">
   <span class="stat">SENS</span>
   <input type="range" id="_tr" min="5" max="35" value="18">
   <span id="_tl">0.18</span>
+  <button id="_dtb">DET</button>
 </div>
 
 <video id="_v" autoplay playsinline muted style="display:none"></video>
@@ -89,9 +98,37 @@ var _sf=0,_ff=true,_rn=false;
 var _fc=0,_fb=0,_fps=0;
 var _p=0.18,_q=0.08,_r=0.82;
 
+// detection layer state
+var _CLS=['person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+  'light','hydrant','sign','meter','bench','bird','cat','dog','horse','sheep','cow',
+  'elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase',
+  'frisbee','skis','snowboard','ball','kite','bat','glove','skateboard','surfboard',
+  'racket','bottle','wineglass','cup','fork','knife','spoon','bowl','banana','apple',
+  'sandwich','orange','broccoli','carrot','hotdog','pizza','donut','cake','chair',
+  'couch','plant','bed','table','toilet','tv','laptop','mouse','remote','keyboard',
+  'phone','microwave','oven','toaster','sink','fridge','book','clock','vase',
+  'scissors','teddy','drier','toothbrush'];
+var _MDL='https://github.com/Jay-Aditya-16/neuromorphic-vision/releases/download/v1-onnx/inference_model.onnx';
+var _sess=null,_di=false,_db=[],_dc=0,_detOn=false,_detInit=false;
+var _rc2=null,_rctx2=null;
+
 document.getElementById('_tr').oninput=function(e){
   _p=parseInt(e.target.value)/100;
   document.getElementById('_tl').textContent=_p.toFixed(2);
+};
+
+document.getElementById('_dtb').onclick=function(){
+  _detOn=!_detOn;
+  if(_detOn){
+    this.classList.add('on');
+    if(!_detInit){_detInit=true;_ldM();}
+  }else{
+    this.classList.remove('on');
+    _db=[];
+    var dc=document.getElementById('det');
+    dc.getContext('2d').clearRect(0,0,dc.width,dc.height);
+    if(_sess)document.getElementById('_s2').textContent='DET: off';
+  }
 };
 
 document.getElementById('go').onclick=async function(){
@@ -121,6 +158,8 @@ function _iGL(){
     new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),_gl.STATIC_DRAW);
   _gl.enableVertexAttribArray(0);
   _gl.vertexAttribPointer(0,2,_gl.FLOAT,false,0,0);
+  _rc2=document.createElement('canvas');_rc2.width=384;_rc2.height=384;
+  _rctx2=_rc2.getContext('2d');
 }
 
 var _vw=0,_vh=0;
@@ -148,6 +187,8 @@ function _rz(){
   document.getElementById('l2').style.left='4px';
   document.getElementById('l3').style.top=(hh+4)+'px';
   document.getElementById('l3').style.left=(hw+4)+'px';
+  var dc=document.getElementById('det');
+  dc.width=window.innerWidth;dc.height=window.innerHeight;
 }
 
 var _lt=0;
@@ -182,6 +223,11 @@ function _tk(now){
   _rp(_F._p,_P._0,w,h,{s0:[_T._c,0]});
   document.getElementById('_s1').textContent=
     'FPS '+_fps+'  SENS '+_p.toFixed(2)+'  '+w+'x'+h;
+  if(_detOn){
+    _dc++;
+    if(_dc%5===0&&_sess&&!_di)_infer();
+    _drawDet();
+  }
 }
 
 function _mT(w,h){
@@ -239,6 +285,83 @@ function _rp(fb,pr,w,h,us){
   _gl.viewport(0,0,w,h);
   _su(pr,us);
   _gl.drawArrays(_gl.TRIANGLES,0,6);
+}
+
+async function _ldM(){
+  document.getElementById('_s2').textContent='DET: loading…';
+  try{
+    ort.env.wasm.numThreads=1;
+    _sess=await ort.InferenceSession.create(_MDL,{
+      executionProviders:['wasm'],graphOptimizationLevel:'all'});
+    document.getElementById('_s2').textContent='DET: ready';
+  }catch(e){
+    document.getElementById('_s2').textContent='DET: unavailable';
+    document.getElementById('_dtb').classList.remove('on');
+    _detOn=false;
+  }
+}
+
+function _prep(){
+  _rctx2.drawImage(_vd,0,0,384,384);
+  var id=_rctx2.getImageData(0,0,384,384),px=id.data;
+  var t=new Float32Array(3*384*384);
+  var mn=[0.485,0.456,0.406],sd=[0.229,0.224,0.225];
+  for(var i=0;i<384*384;i++){
+    t[i]=(px[i*4]/255-mn[0])/sd[0];
+    t[384*384+i]=(px[i*4+1]/255-mn[1])/sd[1];
+    t[2*384*384+i]=(px[i*4+2]/255-mn[2])/sd[2];
+  }
+  return new ort.Tensor('float32',t,[1,3,384,384]);
+}
+
+async function _infer(){
+  if(!_sess||_di||!_vd.videoWidth)return;
+  _di=true;
+  try{
+    var out=await _sess.run({'images':_prep()});
+    var bk=('pred_boxes' in out)?'pred_boxes':Object.keys(out)[0];
+    var lk=('pred_logits' in out)?'pred_logits':Object.keys(out)[1];
+    var bx=out[bk].data,lg=out[lk].data;
+    var N=out[bk].dims[1],nc=out[lk].dims[2];
+    var d=[];
+    for(var i=0;i<N;i++){
+      var lo=i*nc,mx=-1e9,mc=0;
+      for(var c=0;c<nc;c++)if(lg[lo+c]>mx){mx=lg[lo+c];mc=c;}
+      var sm=0;var ei=new Float32Array(nc);
+      for(var c=0;c<nc;c++){ei[c]=Math.exp(lg[lo+c]-mx);sm+=ei[c];}
+      var sc=ei[mc]/sm;
+      if(sc>0.40&&mc<_CLS.length){
+        var bo=i*4;
+        d.push({cx:bx[bo],cy:bx[bo+1],w:bx[bo+2],h:bx[bo+3],sc:sc,cl:mc});
+      }
+    }
+    _db=d;
+    document.getElementById('_s2').textContent='DET: '+d.length+' obj';
+  }catch(e){}
+  _di=false;
+}
+
+function _drawDet(){
+  var dc=document.getElementById('det');
+  var ctx=dc.getContext('2d');
+  ctx.clearRect(0,0,dc.width,dc.height);
+  if(!_db.length)return;
+  var qw=dc.width/2,qh=dc.height/2;
+  ctx.lineWidth=1.5;
+  ctx.font='10px monospace';
+  for(var i=0;i<_db.length;i++){
+    var b=_db[i];
+    var x1=(b.cx-b.w/2)*qw,y1=(b.cy-b.h/2)*qh;
+    var bw=b.w*qw,bh=b.h*qh;
+    ctx.strokeStyle='rgba(0,255,80,0.9)';
+    ctx.strokeRect(x1,y1,bw,bh);
+    var lbl=(_CLS[b.cl]||'?')+' '+(b.sc*100|0)+'%';
+    var tw=ctx.measureText(lbl).width;
+    ctx.fillStyle='rgba(0,0,0,0.6)';
+    ctx.fillRect(x1,Math.max(y1-13,0),tw+4,13);
+    ctx.fillStyle='#0f0';
+    ctx.fillText(lbl,x1+2,Math.max(y1-2,10));
+  }
 }
 
 })();
