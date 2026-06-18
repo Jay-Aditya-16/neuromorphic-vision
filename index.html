@@ -43,9 +43,9 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 
 <div id="labels">
   <span class="lbl" style="top:4px;left:4px">RAW</span>
-  <span class="lbl" id="lbTR" style="top:4px">DVS EVENTS</span>
-  <span class="lbl" id="lbBL">SAE SURFACE</span>
-  <span class="lbl" id="lbBR">SAE + DVS</span>
+  <span class="lbl" id="lbTR" style="top:4px">EVENTS (DVS)</span>
+  <span class="lbl" id="lbBL">SAE ACTIVITY</span>
+  <span class="lbl" id="lbBR">MOVING BODIES</span>
 </div>
 
 <div id="hud">
@@ -55,8 +55,8 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 
 <div id="slider">
   <span class="stat">TAU</span>
-  <input type="range" id="tauR" min="5" max="35" value="15">
-  <span id="tauLbl">0.15</span>
+  <input type="range" id="tauR" min="5" max="35" value="18">
+  <span id="tauLbl">0.18</span>
 </div>
 
 <video id="vid" autoplay playsinline muted style="display:none"></video>
@@ -72,7 +72,7 @@ const vid    = document.getElementById('vid');
 let gl, P = {}, FB = {}, TX = {};
 let saeFlip = 0, firstFrame = true, running = false;
 let fpsCount = 0, fpsBase = 0, fps = 0;
-let tau = 0.15;
+let tau = 0.18;
 const EDGE_TH = 0.08, DECAY = 0.82;
 
 document.getElementById('tauR').oninput = function(e) {
@@ -340,7 +340,7 @@ var DVS_FS = [
 '  float gx = -tl - 2.0*ml - bl + tr + 2.0*mr + br;',
 '  float gy = -tl - 2.0*tc - tr + bl + 2.0*bc + br;',
 '  float mag = sqrt(gx*gx + gy*gy);',
-'  float edge = 1.0 / (1.0 + exp(-(mag - u_edge) * 30.0));',
+'  float edge = step(u_edge, mag);',
 '  float ci = max(lum(texture(u_curr, v_uv)), 0.001);',
 '  float pi = max(lum(texture(u_prev, v_uv)), 0.001);',
 '  float diff = log(ci) - log(pi);',
@@ -396,17 +396,20 @@ var DISP_FS = [
 '',
 '  vec3 col;',
 '  if(panel == 2){',
+'    // TL: raw camera',
 '    col = cam.rgb;',
 '  } else if(panel == 3){',
-'    vec3 base = vec3(g * 0.6);',
-'    if     (ev.r > 0.5) col = mix(base, vec3(0.08, 0.92, 0.08), 0.9);',
-'    else if(ev.g > 0.5) col = mix(base, vec3(0.92, 0.08, 0.08), 0.9);',
-'    else                col = base;',
+'    // TR: pure events on black — like a real DVS camera',
+'    if     (ev.r > 0.5) col = vec3(0.1, 1.0, 0.1);',
+'    else if(ev.g > 0.5) col = vec3(1.0, 0.1, 0.1);',
+'    else                col = vec3(0.0);',
 '  } else if(panel == 0){',
-'    col = inferno(s);',
+'    // BL: SAE — black where no activity, inferno where events happened',
+'    col = s > 0.08 ? inferno(s) : vec3(0.0);',
 '  } else {',
-'    vec3 heat = inferno(s);',
-'    col = mix(vec3(g * 0.45), heat, clamp(s * 2.5, 0.0, 0.9));',
+'    // BR: moving parts only — SAE threshold mask over dark camera',
+'    float mask = step(0.12, s);',
+'    col = mix(vec3(g * 0.15), inferno(s), mask);',
 '  }',
 '',
 '  // divider lines',
