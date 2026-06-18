@@ -1,4 +1,10 @@
 <!DOCTYPE html>
+<!--
+  Copyright (c) 2026 Jayaditya. All rights reserved.
+  The visual processing pipeline implemented in this software is proprietary.
+  Reverse engineering, decompiling, or reproducing the underlying algorithms
+  is strictly prohibited without written permission.
+-->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -24,17 +30,17 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 #labels{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none}
 #slider{position:fixed;right:10px;top:50%;transform:translateY(-50%);
   display:flex;flex-direction:column;align-items:center;gap:5px;opacity:.8}
-#tauR{-webkit-appearance:slider-vertical;writing-mode:vertical-lr;
+#_tr{-webkit-appearance:slider-vertical;writing-mode:vertical-lr;
   direction:rtl;width:28px;height:110px}
-#tauLbl{font-size:10px;color:#888}
+#_tl{font-size:10px;color:#888}
 </style>
 </head>
 <body>
 
 <div id="start">
   <h1>NEUROVISION LITE</h1>
-  <p class="sub">Neuromorphic event-based vision</p>
-  <p class="sub">iPhone 15 &bull; WebGL2 &bull; No install</p>
+  <p class="sub">Event-based vision processing</p>
+  <p class="sub">WebGL2 &bull; No install required</p>
   <button id="go">START CAMERA</button>
   <p class="sub" style="font-size:10px;color:#333">Allow camera access when prompted</p>
 </div>
@@ -43,384 +49,199 @@ h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
 
 <div id="labels">
   <span class="lbl" style="top:4px;left:4px">RAW</span>
-  <span class="lbl" id="lbTR" style="top:4px">EVENTS (DVS)</span>
-  <span class="lbl" id="lbBL">SAE ACTIVITY</span>
-  <span class="lbl" id="lbBR">MOVING BODIES</span>
+  <span class="lbl" id="l1" style="top:4px">EVENTS</span>
+  <span class="lbl" id="l2">ACTIVITY</span>
+  <span class="lbl" id="l3">MOVING BODIES</span>
 </div>
 
 <div id="hud">
-  <span class="stat" id="s1">--</span>
-  <span class="stat" id="s2">--</span>
+  <span class="stat" id="_s1">--</span>
+  <span class="stat" id="_s2">--</span>
 </div>
 
 <div id="slider">
-  <span class="stat">TAU</span>
-  <input type="range" id="tauR" min="5" max="35" value="18">
-  <span id="tauLbl">0.18</span>
+  <span class="stat">SENS</span>
+  <input type="range" id="_tr" min="5" max="35" value="18">
+  <span id="_tl">0.18</span>
 </div>
 
-<video id="vid" autoplay playsinline muted style="display:none"></video>
+<video id="_v" autoplay playsinline muted style="display:none"></video>
 
 <script>
+(function(){
 'use strict';
 
-// ----------------------------------------------------------------
-// State
-// ----------------------------------------------------------------
-const canvas = document.getElementById('c');
-const vid    = document.getElementById('vid');
-let gl, P = {}, FB = {}, TX = {};
-let saeFlip = 0, firstFrame = true, running = false;
-let fpsCount = 0, fpsBase = 0, fps = 0;
-let tau = 0.18;
-const EDGE_TH = 0.08, DECAY = 0.82;
+// runtime decode — shaders are not human-readable in source
+var _d=function(s){return atob(s)};
 
-document.getElementById('tauR').oninput = function(e) {
-  tau = parseInt(e.target.value) / 100;
-  document.getElementById('tauLbl').textContent = tau.toFixed(2);
+var _S={
+_0:_d("I3ZlcnNpb24gMzAwIGVzCmluIHZlYzIgYV9wb3M7b3V0IHZlYzIgdjA7CnZvaWQgbWFpbigpe3YwPWFfcG9zKi41Ky41O2dsX1Bvc2l0aW9uPXZlYzQoYV9wb3MsMC4sMS4pO30="),
+_1:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMDtpbiB2ZWMyIHYwO291dCB2ZWM0IG87CnZvaWQgbWFpbigpe289dGV4dHVyZShzMCx2MCk7fQ=="),
+_2:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMCxzMTsKdW5pZm9ybSBmbG9hdCB1MCx1MTsKdW5pZm9ybSB2ZWMyIHUyOwppbiB2ZWMyIHYwO291dCB2ZWM0IG87CmZsb2F0IF9MKHZlYzQgYyl7cmV0dXJuIC4yMTI2KmMucisuNzE1MipjLmcrLjA3MjIqYy5iO30Kdm9pZCBtYWluKCl7CnZlYzIgZD0xLi91MjsKZmxvYXQgYT1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoLWQueCwtZC55KSkpOwpmbG9hdCBiPV9MKHRleHR1cmUoczAsdjArdmVjMigwLiwtZC55KSkpOwpmbG9hdCBjPV9MKHRleHR1cmUoczAsdjArdmVjMihkLngsLWQueSkpKTsKZmxvYXQgZT1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoLWQueCwwLikpKTsKZmxvYXQgZj1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoZC54LDAuKSkpOwpmbG9hdCBnPV9MKHRleHR1cmUoczAsdjArdmVjMigtZC54LGQueSkpKTsKZmxvYXQgaD1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoMC4sZC55KSkpOwpmbG9hdCBpPV9MKHRleHR1cmUoczAsdjArdmVjMihkLngsZC55KSkpOwpmbG9hdCBneD0tYS0yLiplLWcrYysyLipmK2k7CmZsb2F0IGd5PS1hLTIuKmItYytnKzIuKmgraTsKZmxvYXQgbWc9c3FydChneCpneCtneSpneSk7CmZsb2F0IGVrPXN0ZXAodTEsbWcpOwpmbG9hdCBjaT1tYXgoX0wodGV4dHVyZShzMCx2MCkpLC4wMDEpOwpmbG9hdCBwaT1tYXgoX0wodGV4dHVyZShzMSx2MCkpLC4wMDEpOwpmbG9hdCBkZj1sb2coY2kpLWxvZyhwaSk7CmZsb2F0IHIwPXN0ZXAodTAsZGYpKmVrOwpmbG9hdCByMT1zdGVwKHUwLC1kZikqZWs7Cm89dmVjNChyMCxyMSwwLiwxLik7fQ=="),
+_3:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMCxzMTsKdW5pZm9ybSBmbG9hdCB1MDsKaW4gdmVjMiB2MDtvdXQgdmVjNCBvOwp2b2lkIG1haW4oKXsKdmVjMiBldj10ZXh0dXJlKHMwLHYwKS5yZzsKZmxvYXQgZT1tYXgoZXYucixldi5nKTsKZmxvYXQgcD10ZXh0dXJlKHMxLHYwKS5yOwpmbG9hdCBuPW1heChwKnUwLGUpOwpvPXZlYzQobixuLG4sMS4pO30="),
+_4:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMCxzMSxzMjsKaW4gdmVjMiB2MDtvdXQgdmVjNCBvOwp2ZWMzIF9jbShmbG9hdCB0KXsKaWYodDwuMjUpcmV0dXJuIG1peCh2ZWMzKDAuLDAuLC4wMiksdmVjMyguMjcsMC4sLjMzKSx0KjQuKTsKaWYodDwuNSlyZXR1cm4gbWl4KHZlYzMoLjI3LDAuLC4zMyksdmVjMyguNjYsLjEzLC4xNiksKHQtLjI1KSo0Lik7CmlmKHQ8Ljc1KXJldHVybiBtaXgodmVjMyguNjYsLjEzLC4xNiksdmVjMyguOTksLjY1LC4wNCksKHQtLjUpKjQuKTsKcmV0dXJuIG1peCh2ZWMzKC45OSwuNjUsLjA0KSx2ZWMzKC45OSwxLiwuNjQpLCh0LS43NSkqNC4pO30Kdm9pZCBtYWluKCl7CnZlYzIgdXY9djA7CmludCBweD11di54Pj0uNT8xOjA7aW50IHB5PXV2Lnk+PS41PzE6MDsKdmVjMiBwdXY9dmVjMihweD09MD91di54KjIuOih1di54LS41KSoyLixweT09MD91di55KjIuOih1di55LS41KSoyLik7CmludCBwbj1weSoyK3B4Owp2ZWM0IGNtPXRleHR1cmUoczAscHV2KTsKdmVjMiBldj10ZXh0dXJlKHMxLHB1dikucmc7CmZsb2F0IHN2PXRleHR1cmUoczIscHV2KS5yOwpmbG9hdCBndj0uMjEyNipjbS5yKy43MTUyKmNtLmcrLjA3MjIqY20uYjsKdmVjMyBjb2w7CmlmKHBuPT0yKXtjb2w9Y20ucmdiO30KZWxzZSBpZihwbj09Myl7CmlmKGV2LnI+LjUpY29sPXZlYzMoLjEsMS4sLjEpOwplbHNlIGlmKGV2Lmc+LjUpY29sPXZlYzMoMS4sLjEsLjEpOwplbHNlIGNvbD12ZWMzKDAuKTt9CmVsc2UgaWYocG49PTApe2NvbD1zdj4uMDg/X2NtKHN2KTp2ZWMzKDAuKTt9CmVsc2V7Y29sPW1peCh2ZWMzKGd2Ki4xNSksX2NtKHN2KSxzdGVwKC4xMixzdikpO30KZmxvYXQgbHc9LjAwNDsKaWYoYWJzKHV2LngtLjUpPGx3fHxhYnModXYueS0uNSk8bHcpY29sPW1peChjb2wsdmVjMyguMjIpLC44KTsKbz12ZWM0KGNvbCwxLik7fQ==")
 };
 
-document.getElementById('go').onclick = async function() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 640 },
-        height: { ideal: 480 },
-        frameRate: { ideal: 30 }
-      },
-      audio: false
-    });
-    vid.srcObject = stream;
-    await vid.play();
-    document.getElementById('start').style.display = 'none';
-    initGL();
-    running = true;
-    fpsBase = performance.now();
-    requestAnimationFrame(tick);
-  } catch (err) {
-    alert('Camera error: ' + err.message);
-  }
+var _cv=document.getElementById('c');
+var _vd=document.getElementById('_v');
+var _gl,_P={},_F={},_T={};
+var _sf=0,_ff=true,_rn=false;
+var _fc=0,_fb=0,_fps=0;
+var _p=0.18,_q=0.08,_r=0.82;
+
+document.getElementById('_tr').oninput=function(e){
+  _p=parseInt(e.target.value)/100;
+  document.getElementById('_tl').textContent=_p.toFixed(2);
 };
 
-// ----------------------------------------------------------------
-// WebGL init
-// ----------------------------------------------------------------
-function initGL() {
-  gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
-  if (!gl) { alert('WebGL2 not supported on this browser/device.'); return; }
+document.getElementById('go').onclick=async function(){
+  try{
+    var s=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},
+             width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}},
+      audio:false});
+    _vd.srcObject=s;await _vd.play();
+    document.getElementById('start').style.display='none';
+    _iGL();_rn=true;_fb=performance.now();
+    requestAnimationFrame(_tk);
+  }catch(e){alert('Camera: '+e.message);}
+};
 
-  doResize();
-  window.addEventListener('resize', doResize);
-
-  P.copy = mkProg(VS, COPY_FS);
-  P.dvs  = mkProg(VS, DVS_FS);
-  P.sae  = mkProg(VS, SAE_FS);
-  P.disp = mkProg(VS, DISP_FS);
-
-  // Full-screen quad
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER,
-    new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]),
-    gl.STATIC_DRAW);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+function _iGL(){
+  _gl=_cv.getContext('webgl2',{alpha:false,antialias:false});
+  if(!_gl){alert('WebGL2 not supported');return;}
+  _rz();window.addEventListener('resize',_rz);
+  _P._0=_mp(_S._0,_S._1);
+  _P._1=_mp(_S._0,_S._2);
+  _P._2=_mp(_S._0,_S._3);
+  _P._3=_mp(_S._0,_S._4);
+  var b=_gl.createBuffer();
+  _gl.bindBuffer(_gl.ARRAY_BUFFER,b);
+  _gl.bufferData(_gl.ARRAY_BUFFER,
+    new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),_gl.STATIC_DRAW);
+  _gl.enableVertexAttribArray(0);
+  _gl.vertexAttribPointer(0,2,_gl.FLOAT,false,0,0);
 }
 
-let VW = 0, VH = 0;
-function ensureTex(w, h) {
-  if (w === VW && h === VH) return;
-  VW = w; VH = h;
-  ['cam', 'prev', 'ev', 'sae0', 'sae1'].forEach(function(k) {
-    if (TX[k]) gl.deleteTexture(TX[k]);
-    TX[k] = mkTex(w, h);
+var _vw=0,_vh=0;
+function _eT(w,h){
+  if(w===_vw&&h===_vh)return;
+  _vw=w;_vh=h;
+  ['_c','_p','_e','_s0','_s1'].forEach(function(k){
+    if(_T[k])_gl.deleteTexture(_T[k]);
+    _T[k]=_mT(w,h);
   });
-  ['ev', 'sae0', 'sae1', 'prev'].forEach(function(k) {
-    if (FB[k]) gl.deleteFramebuffer(FB[k]);
-    FB[k] = mkFB(TX[k]);
+  ['_e','_s0','_s1','_p'].forEach(function(k){
+    if(_F[k])_gl.deleteFramebuffer(_F[k]);
+    _F[k]=_mF(_T[k]);
   });
-  firstFrame = true;
+  _ff=true;
 }
 
-function doResize() {
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width  = window.innerWidth  * dpr;
-  canvas.height = window.innerHeight * dpr;
-  canvas.style.width  = window.innerWidth  + 'px';
-  canvas.style.height = window.innerHeight + 'px';
-  var hw = window.innerWidth  / 2;
-  var hh = window.innerHeight / 2;
-  document.getElementById('lbTR').style.left = (hw + 4) + 'px';
-  document.getElementById('lbBL').style.top  = (hh + 4) + 'px';
-  document.getElementById('lbBL').style.left = '4px';
-  document.getElementById('lbBR').style.top  = (hh + 4) + 'px';
-  document.getElementById('lbBR').style.left = (hw + 4) + 'px';
+function _rz(){
+  var dr=window.devicePixelRatio||1;
+  _cv.width=window.innerWidth*dr;_cv.height=window.innerHeight*dr;
+  _cv.style.width=window.innerWidth+'px';_cv.style.height=window.innerHeight+'px';
+  var hw=window.innerWidth/2,hh=window.innerHeight/2;
+  document.getElementById('l1').style.left=(hw+4)+'px';
+  document.getElementById('l2').style.top=(hh+4)+'px';
+  document.getElementById('l2').style.left='4px';
+  document.getElementById('l3').style.top=(hh+4)+'px';
+  document.getElementById('l3').style.left=(hw+4)+'px';
 }
 
-// ----------------------------------------------------------------
-// Render loop
-// ----------------------------------------------------------------
-var lastT = 0;
-function tick(now) {
-  if (!running) return;
-  requestAnimationFrame(tick);
-  if (now - lastT < 30) return;  // cap ~33 fps
-  lastT = now;
-
-  fpsCount++;
-  var elapsed = now - fpsBase;
-  if (elapsed >= 1000) {
-    fps = Math.round(fpsCount * 1000 / elapsed);
-    fpsCount = 0;
-    fpsBase = now;
+var _lt=0;
+function _tk(now){
+  if(!_rn)return;
+  requestAnimationFrame(_tk);
+  if(now-_lt<30)return;
+  _lt=now;
+  _fc++;
+  var el=now-_fb;
+  if(el>=1000){_fps=Math.round(_fc*1000/el);_fc=0;_fb=now;}
+  var w=_vd.videoWidth,h=_vd.videoHeight;
+  if(!w||!h)return;
+  _eT(w,h);
+  _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL,true);
+  _gl.bindTexture(_gl.TEXTURE_2D,_T._c);
+  _gl.texImage2D(_gl.TEXTURE_2D,0,_gl.RGBA,_gl.RGBA,_gl.UNSIGNED_BYTE,_vd);
+  if(_ff){
+    _rp(_F._p,_P._0,w,h,{s0:[_T._c,0]});
+    _ff=false;
   }
-
-  var w = vid.videoWidth, h = vid.videoHeight;
-  if (!w || !h) return;
-  ensureTex(w, h);
-
-  // Upload current frame (flip Y so it's right-side up in WebGL)
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  gl.bindTexture(gl.TEXTURE_2D, TX.cam);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, vid);
-
-  if (firstFrame) {
-    // Initialise prevFrame to current so first DVS diff is zero
-    runPass(FB.prev, P.copy, w, h, { u_tex: [TX.cam, 0] });
-    firstFrame = false;
-  }
-
-  // 1. DVS pass: currFrame + prevFrame -> event map (R=ON, G=OFF)
-  runPass(FB.ev, P.dvs, w, h, {
-    u_curr: [TX.cam, 0],
-    u_prev: [TX.prev, 1],
-    u_tau:  tau,
-    u_edge: EDGE_TH,
-    u_res:  [w, h]
-  });
-
-  // 2. SAE update: events + prevSAE -> newSAE  (ping-pong)
-  var srcSAE = saeFlip ? TX.sae1 : TX.sae0;
-  var dstFB  = saeFlip ? FB.sae0 : FB.sae1;
-  var dstSAE = saeFlip ? TX.sae0 : TX.sae1;
-  runPass(dstFB, P.sae, w, h, {
-    u_ev:   [TX.ev,  0],
-    u_psae: [srcSAE, 1],
-    u_decay: DECAY
-  });
-  saeFlip ^= 1;
-
-  // 3. Final display -> canvas
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.viewport(0, 0, canvas.width, canvas.height);
-  setUniforms(P.disp, {
-    u_cam: [TX.cam,   0],
-    u_ev:  [TX.ev,    1],
-    u_sae: [dstSAE,   2]
-  });
-  gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-  // 4. Save current frame as prev for next iteration
-  runPass(FB.prev, P.copy, w, h, { u_tex: [TX.cam, 0] });
-
-  // HUD
-  document.getElementById('s1').textContent =
-    'FPS ' + fps + '  TAU ' + tau.toFixed(2) + '  ' + w + 'x' + h;
+  _rp(_F._e,_P._1,w,h,{s0:[_T._c,0],s1:[_T._p,1],u0:_p,u1:_q,u2:[w,h]});
+  var _ss=_sf?_T._s1:_T._s0;
+  var _df=_sf?_F._s0:_F._s1;
+  var _dt=_sf?_T._s0:_T._s1;
+  _rp(_df,_P._2,w,h,{s0:[_T._e,0],s1:[_ss,1],u0:_r});
+  _sf^=1;
+  _gl.bindFramebuffer(_gl.FRAMEBUFFER,null);
+  _gl.viewport(0,0,_cv.width,_cv.height);
+  _su(_P._3,{s0:[_T._c,0],s1:[_T._e,1],s2:[_dt,2]});
+  _gl.drawArrays(_gl.TRIANGLES,0,6);
+  _rp(_F._p,_P._0,w,h,{s0:[_T._c,0]});
+  document.getElementById('_s1').textContent=
+    'FPS '+_fps+'  SENS '+_p.toFixed(2)+'  '+w+'x'+h;
 }
 
-// ----------------------------------------------------------------
-// GL helpers
-// ----------------------------------------------------------------
-function mkTex(w, h) {
-  var t = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+function _mT(w,h){
+  var t=_gl.createTexture();
+  _gl.bindTexture(_gl.TEXTURE_2D,t);
+  _gl.texImage2D(_gl.TEXTURE_2D,0,_gl.RGBA,w,h,0,_gl.RGBA,_gl.UNSIGNED_BYTE,null);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_MIN_FILTER,_gl.LINEAR);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_MAG_FILTER,_gl.LINEAR);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_WRAP_S,_gl.CLAMP_TO_EDGE);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_WRAP_T,_gl.CLAMP_TO_EDGE);
   return t;
 }
 
-function mkFB(tex) {
-  var fb = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
-                          gl.TEXTURE_2D, tex, 0);
-  return fb;
+function _mF(tx){
+  var f=_gl.createFramebuffer();
+  _gl.bindFramebuffer(_gl.FRAMEBUFFER,f);
+  _gl.framebufferTexture2D(_gl.FRAMEBUFFER,_gl.COLOR_ATTACHMENT0,_gl.TEXTURE_2D,tx,0);
+  return f;
 }
 
-function mkProg(vs_src, fs_src) {
-  var p = gl.createProgram();
-  function mkShader(type, src) {
-    var s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-      console.error(type === gl.VERTEX_SHADER ? 'VS' : 'FS',
-                    gl.getShaderInfoLog(s));
+function _mp(vs,fs){
+  var p=_gl.createProgram();
+  function _ms(t,src){
+    var s=_gl.createShader(t);
+    _gl.shaderSource(s,src);_gl.compileShader(s);
+    if(!_gl.getShaderParameter(s,_gl.COMPILE_STATUS))
+      console.error(_gl.getShaderInfoLog(s));
     return s;
   }
-  gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   vs_src));
-  gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, fs_src));
-  gl.bindAttribLocation(p, 0, 'a_pos');
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-    console.error('link:', gl.getProgramInfoLog(p));
+  _gl.attachShader(p,_ms(_gl.VERTEX_SHADER,vs));
+  _gl.attachShader(p,_ms(_gl.FRAGMENT_SHADER,fs));
+  _gl.bindAttribLocation(p,0,'a_pos');
+  _gl.linkProgram(p);
   return p;
 }
 
-function setUniforms(prog, us) {
-  gl.useProgram(prog);
-  for (var name in us) {
-    var val = us[name];
-    var loc = gl.getUniformLocation(prog, name);
-    if (loc === null) continue;
-    if (Array.isArray(val) && val[0] instanceof WebGLTexture) {
-      gl.activeTexture(gl.TEXTURE0 + val[1]);
-      gl.bindTexture(gl.TEXTURE_2D, val[0]);
-      gl.uniform1i(loc, val[1]);
-    } else if (Array.isArray(val)) {
-      if (val.length === 2) gl.uniform2f(loc, val[0], val[1]);
-      else if (val.length === 3) gl.uniform3f(loc, val[0], val[1], val[2]);
-    } else {
-      gl.uniform1f(loc, val);
-    }
+function _su(pr,us){
+  _gl.useProgram(pr);
+  for(var n in us){
+    var v=us[n],l=_gl.getUniformLocation(pr,n);
+    if(l===null)continue;
+    if(Array.isArray(v)&&v[0]instanceof WebGLTexture){
+      _gl.activeTexture(_gl.TEXTURE0+v[1]);
+      _gl.bindTexture(_gl.TEXTURE_2D,v[0]);
+      _gl.uniform1i(l,v[1]);
+    }else if(Array.isArray(v)){
+      if(v.length===2)_gl.uniform2f(l,v[0],v[1]);
+      else if(v.length===3)_gl.uniform3f(l,v[0],v[1],v[2]);
+    }else _gl.uniform1f(l,v);
   }
 }
 
-function runPass(fb, prog, w, h, us) {
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-  gl.viewport(0, 0, w, h);
-  setUniforms(prog, us);
-  gl.drawArrays(gl.TRIANGLES, 0, 6);
+function _rp(fb,pr,w,h,us){
+  _gl.bindFramebuffer(_gl.FRAMEBUFFER,fb);
+  _gl.viewport(0,0,w,h);
+  _su(pr,us);
+  _gl.drawArrays(_gl.TRIANGLES,0,6);
 }
 
-// ----------------------------------------------------------------
-// Shaders
-// ----------------------------------------------------------------
-
-var VS = [
-'#version 300 es',
-'in vec2 a_pos;',
-'out vec2 v_uv;',
-'void main(){',
-'  v_uv = a_pos * 0.5 + 0.5;',
-'  gl_Position = vec4(a_pos, 0.0, 1.0);',
-'}'
-].join('\n');
-
-var COPY_FS = [
-'#version 300 es',
-'precision mediump float;',
-'uniform sampler2D u_tex;',
-'in vec2 v_uv; out vec4 o;',
-'void main(){ o = texture(u_tex, v_uv); }'
-].join('\n');
-
-var DVS_FS = [
-'#version 300 es',
-'precision mediump float;',
-'uniform sampler2D u_curr, u_prev;',
-'uniform float u_tau, u_edge;',
-'uniform vec2 u_res;',
-'in vec2 v_uv; out vec4 o;',
-'float lum(vec4 c){ return 0.2126*c.r + 0.7152*c.g + 0.0722*c.b; }',
-'void main(){',
-'  vec2 px = 1.0 / u_res;',
-'  float tl=lum(texture(u_curr,v_uv+vec2(-px.x,-px.y)));',
-'  float tc=lum(texture(u_curr,v_uv+vec2( 0.0, -px.y)));',
-'  float tr=lum(texture(u_curr,v_uv+vec2( px.x,-px.y)));',
-'  float ml=lum(texture(u_curr,v_uv+vec2(-px.x,  0.0)));',
-'  float mr=lum(texture(u_curr,v_uv+vec2( px.x,  0.0)));',
-'  float bl=lum(texture(u_curr,v_uv+vec2(-px.x, px.y)));',
-'  float bc=lum(texture(u_curr,v_uv+vec2( 0.0,  px.y)));',
-'  float br=lum(texture(u_curr,v_uv+vec2( px.x, px.y)));',
-'  float gx = -tl - 2.0*ml - bl + tr + 2.0*mr + br;',
-'  float gy = -tl - 2.0*tc - tr + bl + 2.0*bc + br;',
-'  float mag = sqrt(gx*gx + gy*gy);',
-'  float edge = step(u_edge, mag);',
-'  float ci = max(lum(texture(u_curr, v_uv)), 0.001);',
-'  float pi = max(lum(texture(u_prev, v_uv)), 0.001);',
-'  float diff = log(ci) - log(pi);',
-'  float on_e  = step(u_tau,  diff) * edge;',
-'  float off_e = step(u_tau, -diff) * edge;',
-'  o = vec4(on_e, off_e, 0.0, 1.0);',
-'}'
-].join('\n');
-
-var SAE_FS = [
-'#version 300 es',
-'precision mediump float;',
-'uniform sampler2D u_ev, u_psae;',
-'uniform float u_decay;',
-'in vec2 v_uv; out vec4 o;',
-'void main(){',
-'  vec2 ev = texture(u_ev, v_uv).rg;',
-'  float e  = max(ev.r, ev.g);',
-'  float ps = texture(u_psae, v_uv).r;',
-'  float ns = max(ps * u_decay, e);',
-'  o = vec4(ns, ns, ns, 1.0);',
-'}'
-].join('\n');
-
-var DISP_FS = [
-'#version 300 es',
-'precision mediump float;',
-'uniform sampler2D u_cam, u_ev, u_sae;',
-'in vec2 v_uv; out vec4 o;',
-'',
-'vec3 inferno(float t){',
-'  if(t < 0.25) return mix(vec3(0.0,0.0,0.02), vec3(0.27,0.0,0.33),   t * 4.0);',
-'  if(t < 0.5)  return mix(vec3(0.27,0.0,0.33), vec3(0.66,0.13,0.16),(t-0.25)*4.0);',
-'  if(t < 0.75) return mix(vec3(0.66,0.13,0.16),vec3(0.99,0.65,0.04),(t-0.5)*4.0);',
-'               return mix(vec3(0.99,0.65,0.04), vec3(0.99,1.0,0.64), (t-0.75)*4.0);',
-'}',
-'',
-'void main(){',
-'  vec2 uv = v_uv;',
-'  int px = uv.x >= 0.5 ? 1 : 0;',
-'  int py = uv.y >= 0.5 ? 1 : 0;',
-'  vec2 puv = vec2(',
-'    px == 0 ? uv.x * 2.0 : (uv.x - 0.5) * 2.0,',
-'    py == 0 ? uv.y * 2.0 : (uv.y - 0.5) * 2.0',
-'  );',
-'  int panel = py * 2 + px;',
-'  // panel 2=TL(raw) 3=TR(DVS) 0=BL(SAE) 1=BR(blend)',
-'',
-'  vec4 cam = texture(u_cam, puv);',
-'  vec2 ev  = texture(u_ev,  puv).rg;',
-'  float s  = texture(u_sae, puv).r;',
-'  float g  = 0.2126*cam.r + 0.7152*cam.g + 0.0722*cam.b;',
-'',
-'  vec3 col;',
-'  if(panel == 2){',
-'    // TL: raw camera',
-'    col = cam.rgb;',
-'  } else if(panel == 3){',
-'    // TR: pure events on black — like a real DVS camera',
-'    if     (ev.r > 0.5) col = vec3(0.1, 1.0, 0.1);',
-'    else if(ev.g > 0.5) col = vec3(1.0, 0.1, 0.1);',
-'    else                col = vec3(0.0);',
-'  } else if(panel == 0){',
-'    // BL: SAE — black where no activity, inferno where events happened',
-'    col = s > 0.08 ? inferno(s) : vec3(0.0);',
-'  } else {',
-'    // BR: moving parts only — SAE threshold mask over dark camera',
-'    float mask = step(0.12, s);',
-'    col = mix(vec3(g * 0.15), inferno(s), mask);',
-'  }',
-'',
-'  // divider lines',
-'  float lw = 0.004;',
-'  if(abs(uv.x - 0.5) < lw || abs(uv.y - 0.5) < lw)',
-'    col = mix(col, vec3(0.22), 0.8);',
-'',
-'  o = vec4(col, 1.0);',
-'}'
-].join('\n');
-
+})();
 </script>
 </body>
 </html>
