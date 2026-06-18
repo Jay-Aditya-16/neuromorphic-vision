@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<!--
+  Copyright (c) 2026 Jayaditya. All rights reserved.
+  The visual processing pipeline implemented in this software is proprietary.
+  Reverse engineering, decompiling, or reproducing the underlying algorithms
+  is strictly prohibited without written permission.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>NeuroVision Lite</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#000;overflow:hidden;font-family:monospace}
+#c{display:block;width:100%;height:100%}
+#start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;background:#000;color:#fff;gap:20px;z-index:10}
+h1{font-size:22px;letter-spacing:4px;color:#0f0;font-weight:700}
+.sub{font-size:12px;color:#555}
+#go{background:none;border:1px solid #0f0;color:#0f0;padding:14px 44px;
+  border-radius:6px;font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent;
+  font-family:monospace}
+#go:active{background:#0a2a0a}
+#hud{position:fixed;bottom:max(env(safe-area-inset-bottom,0px),10px);left:0;
+  width:100%;padding:0 12px;display:flex;justify-content:space-between;pointer-events:none}
+.stat{font-size:11px;color:#0f0;text-shadow:0 0 6px #000}
+.lbl{position:absolute;font-size:10px;color:rgba(255,255,80,.85);
+  padding:2px 5px;text-shadow:0 0 5px #000;pointer-events:none}
+#labels{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none}
+#slider{position:fixed;right:10px;top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;align-items:center;gap:5px;opacity:.8}
+#_tr{-webkit-appearance:slider-vertical;writing-mode:vertical-lr;
+  direction:rtl;width:28px;height:110px}
+#_tl{font-size:10px;color:#888}
+#tips{border-top:1px solid #1a1a1a;padding-top:16px;display:flex;flex-direction:column;
+  gap:6px;width:min(320px,88vw);text-align:left}
+.tip{font-size:11px;color:#444;padding-left:16px;position:relative;line-height:1.5}
+.tip::before{content:attr(data-n);position:absolute;left:0;color:#0a0;font-size:10px}
+#demo-note{font-size:10px;color:#2a2a2a;width:min(320px,88vw);text-align:center;
+  border:1px solid #1a1a1a;border-radius:4px;padding:8px 10px;line-height:1.6}
+</style>
+</head>
+<body>
+
+<div id="start">
+  <h1>NEUROVISION LITE</h1>
+  <p class="sub">Event-based vision processing</p>
+  <p class="sub">WebGL2 &bull; Any device &bull; No install</p>
+  <div id="tips">
+    <span class="tip" data-n="1.">Place your phone on a stable surface or hold it steady</span>
+    <span class="tip" data-n="2.">Wait a moment — the panels will go dark as the system calibrates</span>
+    <span class="tip" data-n="3.">Move your hand or any object in the frame to see events fire</span>
+    <span class="tip" data-n="4.">Adjust SENS slider on the right to tune detection threshold</span>
+  </div>
+  <button id="go">START CAMERA</button>
+  <p class="sub" style="font-size:10px;color:#333">Allow camera access when prompted</p>
+  <div id="demo-note">This is a lite browser demo of neuromorphic event-based vision.<br>The full pipeline runs on-device hardware with significantly higher<br>temporal resolution and is designed for robotics &amp; training data collection.</div>
+</div>
+
+<canvas id="c"></canvas>
+
+<div id="labels">
+  <span class="lbl" style="top:4px;left:4px">RAW</span>
+  <span class="lbl" id="l1" style="top:4px">EVENTS</span>
+  <span class="lbl" id="l2">ACTIVITY</span>
+  <span class="lbl" id="l3">MOVING BODIES</span>
+</div>
+
+<div id="hud">
+  <span class="stat" id="_s1">--</span>
+  <span class="stat" id="_s2">--</span>
+</div>
+
+<div id="slider">
+  <span class="stat">SENS</span>
+  <input type="range" id="_tr" min="5" max="35" value="18">
+  <span id="_tl">0.18</span>
+</div>
+
+<video id="_v" autoplay playsinline muted style="display:none"></video>
+
+<script>
+(function(){
+'use strict';
+
+// runtime decode — shaders are not human-readable in source
+var _d=function(s){return atob(s)};
+
+var _S={
+_0:_d("I3ZlcnNpb24gMzAwIGVzCmluIHZlYzIgYV9wb3M7b3V0IHZlYzIgdjA7CnZvaWQgbWFpbigpe3YwPWFfcG9zKi41Ky41O2dsX1Bvc2l0aW9uPXZlYzQoYV9wb3MsMC4sMS4pO30="),
+_1:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMDtpbiB2ZWMyIHYwO291dCB2ZWM0IG87CnZvaWQgbWFpbigpe289dGV4dHVyZShzMCx2MCk7fQ=="),
+_2:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMCxzMTsKdW5pZm9ybSBmbG9hdCB1MCx1MTsKdW5pZm9ybSB2ZWMyIHUyOwppbiB2ZWMyIHYwO291dCB2ZWM0IG87CmZsb2F0IF9MKHZlYzQgYyl7cmV0dXJuIC4yMTI2KmMucisuNzE1MipjLmcrLjA3MjIqYy5iO30Kdm9pZCBtYWluKCl7CnZlYzIgZD0xLi91MjsKZmxvYXQgYT1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoLWQueCwtZC55KSkpOwpmbG9hdCBiPV9MKHRleHR1cmUoczAsdjArdmVjMigwLiwtZC55KSkpOwpmbG9hdCBjPV9MKHRleHR1cmUoczAsdjArdmVjMihkLngsLWQueSkpKTsKZmxvYXQgZT1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoLWQueCwwLikpKTsKZmxvYXQgZj1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoZC54LDAuKSkpOwpmbG9hdCBnPV9MKHRleHR1cmUoczAsdjArdmVjMigtZC54LGQueSkpKTsKZmxvYXQgaD1fTCh0ZXh0dXJlKHMwLHYwK3ZlYzIoMC4sZC55KSkpOwpmbG9hdCBpPV9MKHRleHR1cmUoczAsdjArdmVjMihkLngsZC55KSkpOwpmbG9hdCBneD0tYS0yLiplLWcrYysyLipmK2k7CmZsb2F0IGd5PS1hLTIuKmItYytnKzIuKmgraTsKZmxvYXQgbWc9c3FydChneCpneCtneSpneSk7CmZsb2F0IGVrPXN0ZXAodTEsbWcpOwpmbG9hdCBjaT1tYXgoX0wodGV4dHVyZShzMCx2MCkpLC4wMDEpOwpmbG9hdCBwaT1tYXgoX0wodGV4dHVyZShzMSx2MCkpLC4wMDEpOwpmbG9hdCBkZj1sb2coY2kpLWxvZyhwaSk7CmZsb2F0IHIwPXN0ZXAodTAsZGYpKmVrOwpmbG9hdCByMT1zdGVwKHUwLC1kZikqZWs7Cm89dmVjNChyMCxyMSwwLiwxLik7fQ=="),
+_3:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMCxzMTsKdW5pZm9ybSBmbG9hdCB1MDsKaW4gdmVjMiB2MDtvdXQgdmVjNCBvOwp2b2lkIG1haW4oKXsKdmVjMiBldj10ZXh0dXJlKHMwLHYwKS5yZzsKZmxvYXQgZT1tYXgoZXYucixldi5nKTsKZmxvYXQgcD10ZXh0dXJlKHMxLHYwKS5yOwpmbG9hdCBuPW1heChwKnUwLGUpOwpvPXZlYzQobixuLG4sMS4pO30="),
+_4:_d("I3ZlcnNpb24gMzAwIGVzCnByZWNpc2lvbiBtZWRpdW1wIGZsb2F0Owp1bmlmb3JtIHNhbXBsZXIyRCBzMCxzMSxzMjsKaW4gdmVjMiB2MDtvdXQgdmVjNCBvOwp2ZWMzIF9jbShmbG9hdCB0KXsKaWYodDwuMjUpcmV0dXJuIG1peCh2ZWMzKDAuLDAuLC4wMiksdmVjMyguMjcsMC4sLjMzKSx0KjQuKTsKaWYodDwuNSlyZXR1cm4gbWl4KHZlYzMoLjI3LDAuLC4zMyksdmVjMyguNjYsLjEzLC4xNiksKHQtLjI1KSo0Lik7CmlmKHQ8Ljc1KXJldHVybiBtaXgodmVjMyguNjYsLjEzLC4xNiksdmVjMyguOTksLjY1LC4wNCksKHQtLjUpKjQuKTsKcmV0dXJuIG1peCh2ZWMzKC45OSwuNjUsLjA0KSx2ZWMzKC45OSwxLiwuNjQpLCh0LS43NSkqNC4pO30Kdm9pZCBtYWluKCl7CnZlYzIgdXY9djA7CmludCBweD11di54Pj0uNT8xOjA7aW50IHB5PXV2Lnk+PS41PzE6MDsKdmVjMiBwdXY9dmVjMihweD09MD91di54KjIuOih1di54LS41KSoyLixweT09MD91di55KjIuOih1di55LS41KSoyLik7CmludCBwbj1weSoyK3B4Owp2ZWM0IGNtPXRleHR1cmUoczAscHV2KTsKdmVjMiBldj10ZXh0dXJlKHMxLHB1dikucmc7CmZsb2F0IHN2PXRleHR1cmUoczIscHV2KS5yOwpmbG9hdCBndj0uMjEyNipjbS5yKy43MTUyKmNtLmcrLjA3MjIqY20uYjsKdmVjMyBjb2w7CmlmKHBuPT0yKXtjb2w9Y20ucmdiO30KZWxzZSBpZihwbj09Myl7CmlmKGV2LnI+LjUpY29sPXZlYzMoLjEsMS4sLjEpOwplbHNlIGlmKGV2Lmc+LjUpY29sPXZlYzMoMS4sLjEsLjEpOwplbHNlIGNvbD12ZWMzKDAuKTt9CmVsc2UgaWYocG49PTApe2NvbD1zdj4uMDg/X2NtKHN2KTp2ZWMzKDAuKTt9CmVsc2V7Y29sPW1peCh2ZWMzKGd2Ki4xNSksX2NtKHN2KSxzdGVwKC4xMixzdikpO30KZmxvYXQgbHc9LjAwNDsKaWYoYWJzKHV2LngtLjUpPGx3fHxhYnModXYueS0uNSk8bHcpY29sPW1peChjb2wsdmVjMyguMjIpLC44KTsKbz12ZWM0KGNvbCwxLik7fQ==")
+};
+
+var _cv=document.getElementById('c');
+var _vd=document.getElementById('_v');
+var _gl,_P={},_F={},_T={};
+var _sf=0,_ff=true,_rn=false;
+var _fc=0,_fb=0,_fps=0;
+var _p=0.18,_q=0.08,_r=0.82;
+
+document.getElementById('_tr').oninput=function(e){
+  _p=parseInt(e.target.value)/100;
+  document.getElementById('_tl').textContent=_p.toFixed(2);
+};
+
+document.getElementById('go').onclick=async function(){
+  try{
+    var s=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},
+             width:{ideal:640},height:{ideal:480},frameRate:{ideal:30}},
+      audio:false});
+    _vd.srcObject=s;await _vd.play();
+    document.getElementById('start').style.display='none';
+    _iGL();_rn=true;_fb=performance.now();
+    requestAnimationFrame(_tk);
+  }catch(e){alert('Camera: '+e.message);}
+};
+
+function _iGL(){
+  _gl=_cv.getContext('webgl2',{alpha:false,antialias:false});
+  if(!_gl){alert('WebGL2 not supported');return;}
+  _rz();window.addEventListener('resize',_rz);
+  _P._0=_mp(_S._0,_S._1);
+  _P._1=_mp(_S._0,_S._2);
+  _P._2=_mp(_S._0,_S._3);
+  _P._3=_mp(_S._0,_S._4);
+  var b=_gl.createBuffer();
+  _gl.bindBuffer(_gl.ARRAY_BUFFER,b);
+  _gl.bufferData(_gl.ARRAY_BUFFER,
+    new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),_gl.STATIC_DRAW);
+  _gl.enableVertexAttribArray(0);
+  _gl.vertexAttribPointer(0,2,_gl.FLOAT,false,0,0);
+}
+
+var _vw=0,_vh=0;
+function _eT(w,h){
+  if(w===_vw&&h===_vh)return;
+  _vw=w;_vh=h;
+  ['_c','_p','_e','_s0','_s1'].forEach(function(k){
+    if(_T[k])_gl.deleteTexture(_T[k]);
+    _T[k]=_mT(w,h);
+  });
+  ['_e','_s0','_s1','_p'].forEach(function(k){
+    if(_F[k])_gl.deleteFramebuffer(_F[k]);
+    _F[k]=_mF(_T[k]);
+  });
+  _ff=true;
+}
+
+function _rz(){
+  var dr=window.devicePixelRatio||1;
+  _cv.width=window.innerWidth*dr;_cv.height=window.innerHeight*dr;
+  _cv.style.width=window.innerWidth+'px';_cv.style.height=window.innerHeight+'px';
+  var hw=window.innerWidth/2,hh=window.innerHeight/2;
+  document.getElementById('l1').style.left=(hw+4)+'px';
+  document.getElementById('l2').style.top=(hh+4)+'px';
+  document.getElementById('l2').style.left='4px';
+  document.getElementById('l3').style.top=(hh+4)+'px';
+  document.getElementById('l3').style.left=(hw+4)+'px';
+}
+
+var _lt=0;
+function _tk(now){
+  if(!_rn)return;
+  requestAnimationFrame(_tk);
+  if(now-_lt<30)return;
+  _lt=now;
+  _fc++;
+  var el=now-_fb;
+  if(el>=1000){_fps=Math.round(_fc*1000/el);_fc=0;_fb=now;}
+  var w=_vd.videoWidth,h=_vd.videoHeight;
+  if(!w||!h)return;
+  _eT(w,h);
+  _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL,true);
+  _gl.bindTexture(_gl.TEXTURE_2D,_T._c);
+  _gl.texImage2D(_gl.TEXTURE_2D,0,_gl.RGBA,_gl.RGBA,_gl.UNSIGNED_BYTE,_vd);
+  if(_ff){
+    _rp(_F._p,_P._0,w,h,{s0:[_T._c,0]});
+    _ff=false;
+  }
+  _rp(_F._e,_P._1,w,h,{s0:[_T._c,0],s1:[_T._p,1],u0:_p,u1:_q,u2:[w,h]});
+  var _ss=_sf?_T._s1:_T._s0;
+  var _df=_sf?_F._s0:_F._s1;
+  var _dt=_sf?_T._s0:_T._s1;
+  _rp(_df,_P._2,w,h,{s0:[_T._e,0],s1:[_ss,1],u0:_r});
+  _sf^=1;
+  _gl.bindFramebuffer(_gl.FRAMEBUFFER,null);
+  _gl.viewport(0,0,_cv.width,_cv.height);
+  _su(_P._3,{s0:[_T._c,0],s1:[_T._e,1],s2:[_dt,2]});
+  _gl.drawArrays(_gl.TRIANGLES,0,6);
+  _rp(_F._p,_P._0,w,h,{s0:[_T._c,0]});
+  document.getElementById('_s1').textContent=
+    'FPS '+_fps+'  SENS '+_p.toFixed(2)+'  '+w+'x'+h;
+}
+
+function _mT(w,h){
+  var t=_gl.createTexture();
+  _gl.bindTexture(_gl.TEXTURE_2D,t);
+  _gl.texImage2D(_gl.TEXTURE_2D,0,_gl.RGBA,w,h,0,_gl.RGBA,_gl.UNSIGNED_BYTE,null);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_MIN_FILTER,_gl.LINEAR);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_MAG_FILTER,_gl.LINEAR);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_WRAP_S,_gl.CLAMP_TO_EDGE);
+  _gl.texParameteri(_gl.TEXTURE_2D,_gl.TEXTURE_WRAP_T,_gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+function _mF(tx){
+  var f=_gl.createFramebuffer();
+  _gl.bindFramebuffer(_gl.FRAMEBUFFER,f);
+  _gl.framebufferTexture2D(_gl.FRAMEBUFFER,_gl.COLOR_ATTACHMENT0,_gl.TEXTURE_2D,tx,0);
+  return f;
+}
+
+function _mp(vs,fs){
+  var p=_gl.createProgram();
+  function _ms(t,src){
+    var s=_gl.createShader(t);
+    _gl.shaderSource(s,src);_gl.compileShader(s);
+    if(!_gl.getShaderParameter(s,_gl.COMPILE_STATUS))
+      console.error(_gl.getShaderInfoLog(s));
+    return s;
+  }
+  _gl.attachShader(p,_ms(_gl.VERTEX_SHADER,vs));
+  _gl.attachShader(p,_ms(_gl.FRAGMENT_SHADER,fs));
+  _gl.bindAttribLocation(p,0,'a_pos');
+  _gl.linkProgram(p);
+  return p;
+}
+
+function _su(pr,us){
+  _gl.useProgram(pr);
+  for(var n in us){
+    var v=us[n],l=_gl.getUniformLocation(pr,n);
+    if(l===null)continue;
+    if(Array.isArray(v)&&v[0]instanceof WebGLTexture){
+      _gl.activeTexture(_gl.TEXTURE0+v[1]);
+      _gl.bindTexture(_gl.TEXTURE_2D,v[0]);
+      _gl.uniform1i(l,v[1]);
+    }else if(Array.isArray(v)){
+      if(v.length===2)_gl.uniform2f(l,v[0],v[1]);
+      else if(v.length===3)_gl.uniform3f(l,v[0],v[1],v[2]);
+    }else _gl.uniform1f(l,v);
+  }
+}
+
+function _rp(fb,pr,w,h,us){
+  _gl.bindFramebuffer(_gl.FRAMEBUFFER,fb);
+  _gl.viewport(0,0,w,h);
+  _su(pr,us);
+  _gl.drawArrays(_gl.TRIANGLES,0,6);
+}
+
+})();
+</script>
+</body>
+</html>
